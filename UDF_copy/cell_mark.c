@@ -1,7 +1,7 @@
 #include "udf.h"
 
-#define WALL_ZONE_ID 292
-#define FLUID_ZONE_ID 514
+#define WALL_ZONE_ID  76
+#define FLUID_ZONE_ID 1061
 
 #define UDM_AREA   0
 

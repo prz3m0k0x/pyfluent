@@ -1,0 +1,8 @@
+Geometrie/
+*.trn
+*.png
+*.bat
+*.out
+*.h5
+!*.msh.h5
+libudf/
