@@ -1,8 +1,25 @@
 import ansys.fluent.core as pyfluent
-import os
-import re
-import sys
+import os, re, sys, traceback, shutil, time
 from io import StringIO
+from ansys.fluent.core.solver import (
+    Species,
+    Viscous,
+    Mesh,
+    Energy,
+    VelocityInlet,
+    Initialization,
+    RunCalculation,
+    ReportDefinitions,
+    Monitor
+)
+
+### MESHING SETTINGS ###
+
+GLOBAL_MAX_SIZE = 0.3
+GLOBAL_MIN_SIZE = 1.2
+LOCAL_PARTICLE_SIZE = 0.15
+
+### CASE SETTINGS #
 
 UDF_IGNORE = ["adsorpcja_byname.c"]
 WALL_ZONE = "adsorbent_walls"
@@ -20,18 +37,82 @@ TIME_STEP_COUNT = 1
 ITER_COUNT = 5
 TIME_STEP_SIZE = 0.05
 
-from ansys.fluent.core.solver import (
-    Species,
-    Viscous,
-    Mesh,
-    Energy,
-    VelocityInlet,
-    Initialization,
-    RunCalculation,
-    ReportDefinitions,
-    Monitor
-)
+def Mesher(
+    filename: str, #.pmbd file
+    directory: str, #path to the dir of filename
+    global_min: float = 0.3,
+    global_max: float = 1.2,
+    local_size: float = 0.15,
+    ):
+    filename_strip = filename[:-5]
+    mesh_save_name = f"{filename_strip}.msh.h5"
+    mesh_path = os.path.join(directory, mesh_save_name)
 
+
+    meshing_session = pyfluent.launch_fluent(
+        mode=pyfluent.FluentMode.MESHING,
+        precision=pyfluent.Precision.DOUBLE,
+        processor_count=1,
+        ui_mode="no_gui",
+        cwd= directory,
+        cleanup_on_exit= True
+    )
+
+    try:  
+        xy_meshing = meshing_session.two_dimensional_meshing()
+
+        load_cad = xy_meshing.load_cad_geometry_2d
+        load_cad.file_name = filename
+        load_cad.length_unit = "mm"
+        load_cad()
+
+        update_boundaries = xy_meshing.update_boundaries_2d
+        update_boundaries.selection_type = "zone"
+        update_boundaries()
+
+        global_sizing = xy_meshing.define_global_sizing_2d
+        global_sizing.max_size = global_max
+        global_sizing.min_size = global_min
+        global_sizing()
+
+        add_local_sizing = xy_meshing.add_local_sizing_2d
+        add_local_sizing.add_child = "No"
+        add_local_sizing.boi_control_name = "edgesize_1"
+        add_local_sizing.boi_execution = "Edge Size"
+        add_local_sizing.boi_size = local_size
+        add_local_sizing.boi_zoneor_label = "label"
+        add_local_sizing.draw_size_control = True
+        add_local_sizing.edge_label_list = ["adsorbent_walls"]
+        add_local_sizing.add_child_and_update(defer_update=False)
+
+        generate_surface_mesh = xy_meshing.generate_initial_surface_mesh
+        mesh_preferences = generate_surface_mesh.surface_2d_preferences
+        mesh_preferences.show_advanced_options = True
+        mesh_preferences.merge_edge_zones_based_on_labels = "yes"
+        mesh_preferences.merge_face_zones_based_on_labels = "yes"
+        generate_surface_mesh()
+
+        tasks = meshing_session.workflow.TaskObject
+        export_mesh = tasks["Export Fluent 2D Mesh"]
+        export_mesh.Arguments.set_state(
+            {
+                "FileName": mesh_path,
+            }
+        )
+        export_mesh.Execute()
+
+        print(f"Meshing {filename} successful -> {mesh_path}")
+        return mesh_path
+
+    except Exception as e:
+        print(f"Meshing failed for {filename}")
+        print("Type:", type(e).__name__)
+        print("Repr:", repr(e))
+        traceback.print_exc()
+        return None
+
+    finally:
+        meshing_session.exit()
 
 def update_udf_zone_ids(udf_file_path, wall_zone_id, fluid_zone_id):
 
@@ -63,14 +144,12 @@ def update_udf_zone_ids(udf_file_path, wall_zone_id, fluid_zone_id):
     except:
         print(f"No fluid and wallzone dependencies in udf {udf_file_path}")
 
-
-
 def ConcentrationToMassFrac(concentration, density, molar_mass):
     return concentration * molar_mass / density
 
-def SolverSettings(mesh_file: str):
+def SolverSettings(mesh : str): #Mesh is a path to msh.h5 file
     #Initializing case
-    file_path = os.path.dirname(os.path.realpath(__file__))
+    file_path = os.path.split(mesh)[0] #also the name of the folder
     print(file_path)
 
     solver_session = pyfluent.launch_fluent(
@@ -79,12 +158,13 @@ def SolverSettings(mesh_file: str):
         cwd= file_path,
         dimension=2,
         precision=pyfluent.Precision.DOUBLE,
-        processor_count=4,
-        ui_mode="gui",
-        cleanup_on_exit=False,
+        processor_count=3,
+        cleanup_on_exit=True,
+        ui_mode= "gui"
     )
+
     #Reading mesh
-    solver_session.settings.file.read_mesh(file_name = mesh_file)
+    solver_session.settings.file.read_mesh(file_name = mesh)
     mesh = Mesh(solver_session, new_instance_name="mesh")
     mesh.surfaces_list = mesh.surfaces_list.allowed_values()
     mesh.display()
@@ -101,7 +181,7 @@ def SolverSettings(mesh_file: str):
 
     #general settings
     time = solver_session.settings.setup.general.solver.time
-    time.set_state("unsteady-2nd-order")
+    time.set_state("unsteady-1st-order")
 
     #turbulence model
     viscous = Viscous(solver_session)
@@ -161,41 +241,37 @@ def SolverSettings(mesh_file: str):
     user_defined.memory.memory_locations.set_state(5)
 
     # directory of this Python file
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-
     # UDF folder inside it
-    udf_dir = os.path.join(base_dir, UDF_FOLDER)
-    
+
     c_files = []
-    for root, dirs, files in os.walk(udf_dir):
+    for root, dirs, files in os.walk(file_path):
         for name in files:
             if name.endswith(".c"):
                 if name in UDF_IGNORE:
                     continue
                 c_files.append(os.path.join(root, name))
     for file in c_files:
-        path = os.path.join(udf_dir, file)
-        update_udf_zone_ids(path, wall_zone_id= wall_id, fluid_zone_id= fluid_id)
+        update_udf_zone_ids(file, wall_zone_id= wall_id, fluid_zone_id= fluid_id)
     
     print(c_files)
 
-    library_path = os.path.join(file_path, UDF_LIBRARY_NAME)
+    library_path = os.path.join(file_path, "libudf")
 
 
     user_defined.compiled_udf(library_name= library_path, source_files= c_files, use_built_in_compiler= True)
     user_defined.load(udf_library_name= library_path)
 
-    user_defined.function_hooks.execute_at_end(lib_name= f"{EXECUTE_AT_THE_END[0]}::{UDF_LIBRARY_NAME}")
+    user_defined.function_hooks.execute_at_end(lib_name= f"{EXECUTE_AT_THE_END[0]}::libudf")
 
     fluid_zone[fluid_zone_name].sources.enable = True
     fluid_zone[fluid_zone_name].sources.terms["mass"].resize(1)
     fluid_zone[fluid_zone_name].sources.terms["species-0"].resize(1)
 
     fluid_zone[fluid_zone_name].sources.terms["mass"][0].option.set_state('udf')
-    fluid_zone[fluid_zone_name].sources.terms['mass'][0].udf.set_state(f"mass_source::{UDF_LIBRARY_NAME}")
+    fluid_zone[fluid_zone_name].sources.terms['mass'][0].udf.set_state(f"mass_source::libudf")
 
     fluid_zone[fluid_zone_name].sources.terms["species-0"][0].option.set_state('udf')
-    fluid_zone[fluid_zone_name].sources.terms["species-0"][0].udf.set_state(f"mass_source::{UDF_LIBRARY_NAME}")
+    fluid_zone[fluid_zone_name].sources.terms["species-0"][0].udf.set_state(f"mass_source::libudf")
 
     initialization = Initialization(solver_session)
 
@@ -205,7 +281,7 @@ def SolverSettings(mesh_file: str):
     
 
     for on_demand in EXECUTE_ON_DEMAND:
-        user_defined.execute_on_demand(lib_name= f"{on_demand}::{UDF_LIBRARY_NAME}")
+        user_defined.execute_on_demand(lib_name= f"{on_demand}::libudf")
 
         rep_defs = ReportDefinitions(solver_session)
     
@@ -259,9 +335,30 @@ def SolverSettings(mesh_file: str):
     print("Saved to final_performance.txt")
 
     return solver_session
- 
- 
-if __name__ == "__main__":
 
-    solver = SolverSettings(mesh_file="mesh2d.msh.h5")
+file_path = os.path.abspath(__file__)
+
+for root, dirs, files in os.walk(os.path.dirname(file_path)):
+    for name in files:
+        if name.endswith(".pmdb"):
+            try:
+                geometry_file_path = os.path.join(root, name)
+                case_path = os.path.splitext(geometry_file_path)[0]
+                os.makedirs(case_path, exist_ok=True)
+                shutil.copyfile(geometry_file_path, os.path.join(case_path, name))
+                mesh = Mesher(name, case_path, GLOBAL_MIN_SIZE, GLOBAL_MAX_SIZE, LOCAL_PARTICLE_SIZE)
+
+                for root_1, dirs_1, files_1 in os.walk(root):
+                    for name_1 in files_1:
+                        if name_1.endswith(".c") or name_1.endswith(".scm"):
+                            c_file_path = os.path.join(root, name_1)
+                            shutil.copyfile(c_file_path, os.path.join(case_path, name_1))
+                
+                #copying important files: mixture database and UDFs
+                time.sleep(10)
+                solution = SolverSettings(mesh)
+                
+            except Exception as e:
+                traceback.print_exc()
+                print(f"Failed for {name}: {e}")
 
