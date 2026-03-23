@@ -1,0 +1,112 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;                                                              ;;;
+;;;             Fluent USER DEFINED MATERIAL DATABASE            ;;;
+;;;                                                              ;;;
+;;; (name type[fluid/solid] (chemical-formula . formula)         ;;;
+;;;             (prop1 (method1a . data1a) (method1b . data1b))  ;;;
+;;;            (prop2 (method2a . data2a) (method2b . data2b)))  ;;;
+;;;                                                              ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(
+	(reaction-mixture mixture
+		(chemical-formula . #f)
+		(species (names (so2 so3 o2 n2) () ()))
+		(reactions (finite-rate ("reaction-forward" ((so2 1. 1. 1) (o2 0.5 0.5 1)) ((so3 1. 0. 1)) ((n2 0 1)) (stoichiometry 1so2 + 0.5o2 --> 1so3) (arrhenius 0.00119 113000. 0.)) ("reaction-backward" ((so3 1. 1. 1)) ((so2 1. 0. 1) (o2 0.5 0. 1)) ((n2 0 1)) (stoichiometry 1so3 --> 1so2 + 0.5o2) (arrhenius 5700. 212000. 0.))) (eddy-dissipation ("reaction-forward" ((so2 1. 1. 1) (o2 0.5 0.5 1)) ((so3 1. 0. 1)) ((n2 0 1)) (stoichiometry 1so2 + 0.5o2 --> 1so3) (arrhenius 0.00119 113000. 0.)) ("reaction-backward" ((so3 1. 1. 1)) ((so2 1. 0. 1) (o2 0.5 0. 1)) ((n2 0 1)) (stoichiometry 1so3 --> 1so2 + 0.5o2) (arrhenius 5700. 212000. 0.))) (finite-rate/eddy-dissipation ("reaction-forward" ((so2 1. 1. 1) (o2 0.5 0.5 1)) ((so3 1. 0. 1)) ((n2 0 1)) (stoichiometry 1so2 + 0.5o2 --> 1so3) (arrhenius 0.00119 113000. 0.)) ("reaction-backward" ((so3 1. 1. 1)) ((so2 1. 0. 1) (o2 0.5 0. 1)) ((n2 0 1)) (stoichiometry 1so3 --> 1so2 + 0.5o2) (arrhenius 5700. 212000. 0.))))
+		(density (incompressible-ideal-gas . #f))
+		(specific-heat (mixing-law . #f))
+		(thermal-conductivity (mass-weighted-mixing-law . #f) (constant . 0.0454))
+		(viscosity (mass-weighted-mixing-law . #f) (constant . 1.72e-05))
+		(mass-diffusivity (kinetic-theory . #f) (constant-dilute-appx 2.88e-05))
+		(speed-of-sound (none . #f))
+		(reaction-mechs (reaction-mechs ("mechanism-1" (reaction-type . volumetric) (reaction-list "reaction-forward" "reaction-backward") (site-info))))
+	)
+
+	(sulfur-dioxide fluid
+		(chemical-formula . so2)
+		(density (constant . 2.77))
+		(specific-heat (polynomial piecewise-polynomial (300 1000 377.8587 1.0516444 -0.00089638195 4.3205361e-07 -1.1391317e-10) (1000 5000 681.95091 0.25678391 -0.0001064779 2.0458964e-08 -1.4541688e-12)) (constant . 622.28) (polynomial nasa-9-piecewise-polynomial (200. 1000. -6892529. 117976.1 -305.8826 2.860984 -0.003258548 1.877041e-06 -4.372455e-10) (1000. 6000. -14634760. -107099.7 988.4446 -0.02594772 7.340004e-06 -7.078734e-10 3.787427e-14)))
+		(thermal-conductivity (constant . 0.0104))
+		(viscosity (constant . 1.2e-05))
+		(molecular-weight (constant . 64.06480000000001))
+		(absorption-coefficient (constant . 0.74) (polynomial piecewise-linear (550 . 1.1) (890 . 1.28) (1220 . 1.05) (1550 . 0.74)))
+		(formation-enthalpy (constant . -296861220.))
+		(reference-temperature (constant . 298))
+		(formation-entropy (constant . 248098.25))
+		(critical-pressure (constant . 7884000.))
+		(critical-temperature (constant . 430.8))
+		(critical-volume (constant . 0.001904))
+		(acentric-factor (constant . 0.256))
+		(therm-exp-coeff (constant . 0))
+		(speed-of-sound (none . #f))
+		(lennard-jones-length (constant . 4))
+		(lennard-jones-energy (constant . 100))
+	)
+
+	(sulfur-trioxide fluid
+		(chemical-formula . so3)
+		(specific-heat (polynomial piecewise-polynomial (300 1000 267.43922 1.5734001 -0.0012772035 4.4034439e-07 -5.4695059e-11) (1000 5000 732.20137 0.33715043 -0.00014631191 2.8262736e-08 -2.0171161e-12)) (polynomial nasa-9-piecewise-polynomial (200. 1000. -4105155. 64477.46 -149.3209 2.870521 -0.003266025 1.861822e-06 -4.285286e-10) (1000. 6000. -22497590. -135124.5 1138.488 -0.03985814 8.795755999999999e-06 -1.008318e-09 4.673855e-14)))
+		(molecular-weight (constant . 80.06219))
+		(formation-enthalpy (constant . -395782300.))
+		(reference-temperature (constant . 298))
+		(formation-entropy (constant . 256685.5))
+		(critical-pressure (constant . 8210000.))
+		(critical-temperature (constant . 490.9))
+		(critical-volume (constant . 0.00158))
+		(acentric-factor (constant . 0.481))
+		(density (constant . 1))
+		(thermal-conductivity (constant . 0.0454))
+		(viscosity (constant . 1.72e-05))
+		(therm-exp-coeff (constant . 0))
+		(speed-of-sound (none . #f))
+		(lennard-jones-length (constant . 4))
+		(lennard-jones-energy (constant . 100))
+	)
+
+	(oxygen fluid
+		(chemical-formula . o2)
+		(density (constant . 1.2999))
+		(specific-heat (polynomial piecewise-polynomial (300 1000 834.82647 0.29295801 -0.00014956371 3.4138849e-07 -2.2783585e-10) (1000 5000 960.75234 0.15941258 -3.2708852e-05 4.6127648e-09 -2.9528324e-13)) (constant . 919.3099999999999) (polynomial 811.1803 0.4108345 -0.0001750725 3.757596e-08 -2.973548e-12) (polynomial piecewise-linear (300 . 914) (600 . 1005) (1000 . 1084) (1500 . 1136) (2000 . 1175) (2500 . 1215)) (polynomial nasa-9-piecewise-polynomial (200. 1000. -8900882. 125943. 290.7605 1.115711 -0.0001776324 -5.257471e-07 2.699811e-10) (1000. 6000. -269695000. 609273.7 472.8337 0.3294337 -5.68541e-05 5.336324e-09 -2.128966e-13) (6000. 20000. 129276600000. -74472060. 17384.01 -1.603184 7.837712999999999e-05 -1.928359e-09 1.891139e-14)))
+		(thermal-conductivity (constant . 0.0246) (polynomial 0.003921754 8.081212999999999e-05 -1.354094e-08 2.220444e-12 -1.416139e-16) (gupta-curve-fit-conductivity 0.07987 -2.58428 31.25959 -166.76267 321.6982))
+		(viscosity (constant . 1.919e-05) (polynomial 7.879426000000001e-06 4.924946e-08 -9.851545e-12 1.527411e-15 -9.425673999999999e-20) (sutherland 1.919e-05 273.11 138.9) (power-law 1.919e-05 273.11 0.6899999999999999) (blottner-curve-fit 0.0449 -0.08260000000000001 -9.199999999999999) (gupta-curve-fit-viscosity 0.0484 -0.1455 -8.9231))
+		(molecular-weight (constant . 31.9988))
+		(characteristic-vibrational-temperature (constant . 2239))
+		(formation-enthalpy (constant . 0))
+		(reference-temperature (constant . 298.15))
+		(lennard-jones-length (constant . 3.458))
+		(lennard-jones-energy (constant . 107.4))
+		(thermal-accom-coefficient (constant . 0.9137))
+		(velocity-accom-coefficient (constant . 0.9137))
+		(formation-entropy (constant . 205026.86))
+		(critical-pressure (constant . 5043000.))
+		(critical-temperature (constant . 154.58))
+		(acentric-factor (constant . 0.021))
+		(critical-volume (constant . 0.002293))
+		(speed-of-sound (none . #f))
+		(therm-exp-coeff (constant . 0))
+	)
+
+	(nitrogen fluid
+		(chemical-formula . n2)
+		(density (constant . 1.138))
+		(specific-heat (polynomial piecewise-polynomial (300 1000 979.0429799999999 0.4179639 -0.0011762792 1.6743943e-06 -7.2562971e-10) (1000 5000 868.62291 0.44162954 -0.00016872295 2.9967875e-08 -2.0043858e-12)) (constant . 1040.67) (polynomial 938.8992 0.3017911 -8.109227999999999e-05 8.263892000000001e-09 -1.537235e-13) (polynomial piecewise-linear (300 . 1045) (600 . 1075) (1000 . 1164) (1500 . 1239) (2000 . 1283) (2500 . 1314)) (polynomial nasa-9-piecewise-polynomial (200. 1000. 6560439. -113332.9 1805.372 -2.531997 0.004109665 -2.85696e-06 7.478551e-10) (1000. 6000. 174434500. -664614.8 1800.686 -0.1822274 4.42772e-05 -5.707826e-09 3.151908e-13) (6000. 20000. 246647100000. -190569000. 59961.97 -9.097272 0.0007381193 -2.880752e-08 4.266652e-13)))
+		(thermal-conductivity (constant . 0.0242) (polynomial 0.004737109 7.271938000000001e-05 -1.122018e-08 1.454901e-12 -7.871726e-17) (gupta-curve-fit-conductivity 0.03607 -1.07503 11.95029 -57.90063 93.21782))
+		(viscosity (constant . 1.663e-05) (polynomial 7.473306e-06 4.083689e-08 -8.244628e-12 1.305629e-15 -8.177936e-20) (sutherland 1.663e-05 273.11 106.67) (power-law 1.663e-05 273.11 0.67) (blottner-curve-fit 0.0268 0.318 -11.3) (gupta-curve-fit-viscosity 0.0203 0.4329 -11.8153))
+		(molecular-weight (constant . 28.0134))
+		(characteristic-vibrational-temperature (constant . 3395))
+		(formation-enthalpy (constant . 0))
+		(reference-temperature (constant . 298.15))
+		(lennard-jones-length (constant . 3.621))
+		(lennard-jones-energy (constant . 97.53))
+		(thermal-accom-coefficient (constant . 0.9137))
+		(velocity-accom-coefficient (constant . 0.9137))
+		(formation-entropy (constant . 191494.78))
+		(critical-pressure (constant . 3398000.))
+		(critical-temperature (constant . 126.2))
+		(acentric-factor (constant . 0.037))
+		(critical-volume (constant . 0.003216))
+		(speed-of-sound (none . #f))
+		(therm-exp-coeff (constant . 0))
+	)
+
+)
