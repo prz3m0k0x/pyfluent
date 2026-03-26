@@ -7,26 +7,21 @@ from ansys.fluent.core.solver import (
     Energy,
     Initialization,
     RunCalculation,
-    ReportDefinitions
+    ReportDefinitions,
+    Monitor
 )
-import os, traceback
+import os, traceback, sys
 
 #OPTIMIZATION PARAMETERS
-LengthCat1 = 800.0
-LengthCool = 1500.0
-LengthCat2 = 1600.0
-inlet_Y_SO2 = 0.1
+LengthCat1 = float(sys.argv[1])
+LengthCool = float(sys.argv[2])
+LengthCat2 = float(sys.argv[3])
+inlet_Y_SO2 = float(sys.argv[4])
+cwd = str(sys.argv[5])
+script_file = str(sys.argv[6])
+mixture_file = str(sys.argv[7])
+solver_file = str(sys.argv[8])
 
-directory = os.path.dirname(__file__)
-
-with os.scandir(directory) as d:
-    for e in d:
-        if e.is_file and e.name.endswith(".scscript"):
-            script_path = e.path
-            break
-
-if script_path is None:
-    print("Warning: No .scscript file found!")
 
 script_args = {"LengthBed1"   : "500",   # mm
                 "LengthCat1"  : str(LengthCat1),   # mm
@@ -34,7 +29,7 @@ script_args = {"LengthBed1"   : "500",   # mm
                 "LengthCat2"  : str(LengthCat2),   # mm
                 "LengthBed2"  : "2500",   # mm
                 "Height"      : "2500",   # mm
-                "dir"         : directory,
+                "dir"         : cwd,
                 "name"        : "geometry"
                 }
 
@@ -46,8 +41,8 @@ def Geometry(file_path : str, script_args : dict):
     return modeler, geometry_file
 
 def Mesher(
-        filename: str, #.pmbd file of case
-        directory: str, #path to the dir of case
+        file_path: str, #path to.pmbd file of case
+        cwd: str, #current working directory
         ):
     
     #MESH PARAMETERS
@@ -55,10 +50,8 @@ def Mesher(
     GLOBAL_MAX: float = 240.
     LOCAL_SIZE: float = 120.
 
-
-    filename_strip = filename[:-5]
-    mesh_save_name = f"{filename_strip}.msh.h5"
-    mesh_path = os.path.join(directory, mesh_save_name)
+    mesh_save_name = "geometry.msh.h5"
+    mesh_path = os.path.join(cwd, mesh_save_name)
 
 
     meshing_session = pyfluent.launch_fluent(
@@ -66,7 +59,7 @@ def Mesher(
         precision= "double",
         processor_count=8,
         ui_mode="no_gui",
-        cwd= directory,
+        cwd= cwd,
         cleanup_on_exit= True
     )
 
@@ -74,7 +67,7 @@ def Mesher(
         workflow = meshing_session.workflow  
         workflow.InitializeWorkflow(WorkflowType = "Watertight Geometry")
         
-        workflow.TaskObject["Import Geometry"].Arguments = dict(FileName = filename)
+        workflow.TaskObject["Import Geometry"].Arguments = dict(FileName = file_path)
         workflow.TaskObject["Import Geometry"].Execute()
 
         local_sizing = meshing_session.workflow.TaskObject["Add Local Sizing"]
@@ -127,10 +120,10 @@ def Mesher(
 
         volume_mesh_gen.Execute()
 
-        meshing_session.tui.file.write_mesh(mesh_save_name)
+        meshing_session.tui.file.write_mesh(mesh_path)
 
     except Exception as e:
-        print(f"Meshing failed for {filename}")
+        print(f"Meshing failed for {file_path}")
         print("Type:", type(e).__name__)
         print("Repr:", repr(e))
         traceback.print_exc()
@@ -139,19 +132,19 @@ def Mesher(
     finally:
         meshing_session.exit()
     
-    return meshing_session, mesh_save_name
+    return meshing_session, mesh_path
 
 def Setup(
-    filename: str,          #path to .msh.h5 file
-    directory: str,     #working directory
-    inlety_Y_SO2: float
+    file_path,     #path to .msh.h5 file
+    cwd,     #working directory
+    inlet_Y_SO2: float,
+    mixture_file #path to .scm file
 ):
     #CASE PARAMETERS
 
     INLET_NAME          = "inlet"
     OUTLET_NAME         = "outlet"
     WALLS_NAME          = "walls"
-    MIXTURE_SCM         = "reaction-mixture"
     MIXTURE_MODEL       = "reaction-mixture"
 
     ZONE_FLUID1         = "fluid_zone1"
@@ -176,7 +169,7 @@ def Setup(
     # Inlet conditions
     INLET_VELOCITY = 0.5
     INLET_TEMPERATURE = 773.15 # K
-    INLET_Y_SO2 = inlety_Y_SO2       #SO2 mass fraction at inlet
+    INLET_Y_SO2 = inlet_Y_SO2       #SO2 mass fraction at inlet
     INLET_Y_O2 = 0.21 * (1 - INLET_Y_SO2)   #O2 in remaining air
 
     # Solver
@@ -184,7 +177,7 @@ def Setup(
 
     solver_session = pyfluent.launch_fluent(
         mode=pyfluent.FluentMode.SOLVER,
-        cwd=directory,
+        cwd=cwd,
         dimension=3,
         precision=pyfluent.Precision.DOUBLE,
         processor_count=8,
@@ -193,7 +186,7 @@ def Setup(
     )
 
     try:
-        solver_session.settings.file.read_mesh(file_name=filename)
+        solver_session.settings.file.read_mesh(file_name= file_path)
 
         mesh_obj = Mesh(solver_session, new_instance_name="mesh")
         mesh_obj.surfaces_list = mesh_obj.surfaces_list.allowed_values()
@@ -223,18 +216,18 @@ def Setup(
         species.model.option = "species-transport"
         species.reactions.enable_volumetric_reactions = True
 
-        scm_path = os.path.join(directory, f"{MIXTURE_SCM}.scm")
+        scm_path = mixture_file
         try:
             solver_session.tui.define.materials.data_base.database_type(
                 "user-defined",
                 f"{scm_path}"
             )
-            solver_session.tui.define.materials.copy("mixture", MIXTURE_MODEL)
+            solver_session.tui.define.materials.copy("mixture", f"{MIXTURE_MODEL}")
             print(f"Loaded mixture from {scm_path}")
         except Exception as e:
             print(f"Failed to load mixture SCM: {e}")
 
-        species.model.material = MIXTURE_MODEL
+        species.model.material = f"{MIXTURE_MODEL}"
 
         fluid_zone = solver_session.settings.setup.cell_zone_conditions.fluid
         for fluid in fluid_zone.get_object_names():
@@ -316,51 +309,52 @@ def Setup(
         so2_rep.field = "so2"
         so2_rep.surface_names = [OUTLET_NAME]
 
-        #Initialization
+
+        so3_file = os.path.join(cwd, "so3-outlet-fraction.out")
+        so2_file = os.path.join(cwd, "so2-outlet-fraction.out")
+
+ 
+        solver_session.settings.solution.monitor.report_files.create(name="so3-monitor")
+        solver_session.settings.solution.monitor.report_files["so3-monitor"] = {
+            "file_name": so3_file,
+            "report_defs": ["so3-outlet-fraction"]
+        }
+
+
+        solver_session.settings.solution.monitor.report_files.create(name="so2-monitor")
+        solver_session.settings.solution.monitor.report_files["so2-monitor"] = {
+            "file_name": so2_file,
+            "report_defs": ["so2-outlet-fraction"]
+        }
+
+
         initialization = Initialization(solver_session)
         initialization.initialization_type = "hybrid"
         initialization.initialize()
 
-        #Run
         run_calc = RunCalculation(solver_session)
         run_calc.iter_count = ITER_COUNT
         run_calc.calculate()
 
-        so3_res = solver_session.settings.solution.report_definitions.compute(report_defs=["so3-outlet-fraction"])
-        so2_res = solver_session.settings.solution.report_definitions.compute(report_defs=["so2-outlet-fraction"])
 
-        extracted_so3 = so3_res[0]["so3-outlet-fraction"][0]
-        extracted_so2 = so2_res[0]["so2-outlet-fraction"][0]
-
-        # Save case and data
-        case_path = os.path.join(directory, "so2_reactor.cas.h5")
+        case_path = os.path.join(cwd, "so2_reactor.cas.h5")
         solver_session.settings.file.write_case_data(file_name=case_path)
         print(f"Setup complete. Case saved to {case_path}")
 
-        return solver_session, extracted_so3, extracted_so2
+        return solver_session
 
     except Exception as e:
         print(f"Setup failed: {type(e).__name__}: {e}")
         traceback.print_exc()
         return None
 
-def Workflow(script_args, inlet_Y_SO2, directory, script_path):
+def Workflow(script_args, inlet_Y_SO2, cwd, script_file, mixture_file):
 
-    geometry = Geometry(file_path= script_path, script_args= script_args)[1]
+    geometry_session, geometry = Geometry(file_path= script_file, script_args= script_args)
 
-    mesh = Mesher(filename= geometry, directory= directory)[1]
+    meshing_session, mesh = Mesher(file_path= geometry, cwd= cwd)
 
-    solution = Setup(filename= "geometry.msh.h5", directory= directory, inlety_Y_SO2= inlet_Y_SO2)
+    solution_session = Setup(file_path= mesh, cwd= cwd, inlet_Y_SO2= float(inlet_Y_SO2), mixture_file= mixture_file)
 
-    return solution[1], solution[2]
 
-#Optimization responses
-
-output = Workflow(script_args= script_args, inlet_Y_SO2= inlet_Y_SO2, directory= directory, script_path= script_path)
-so3_mass_fraction_out = output[0]
-so2_mass_fraction_out = output[1]
-
-so3_conversion = so3_mass_fraction_out / inlet_Y_SO2
-
-#Directory for geometry script
-
+solution_session = Workflow(script_args= script_args, inlet_Y_SO2= float(inlet_Y_SO2), cwd= cwd, script_file= script_file, mixture_file= mixture_file)
