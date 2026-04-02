@@ -31,7 +31,7 @@ def write_response(filepath, outputs, names):
 
 def run(LengthCat1, LengthCool, LengthCat2, inlet_Y_SO2, path, script_file, mixture_file, solver_file):
     py = r"C:\Users\praktyka\AppData\Local\Programs\Python\Python313\python.exe"
-    script = r"C:\Users\praktyka\Desktop\Golasz\optislang\test2\test2.opr\solution.py"
+    script = r"C:\Users\praktyka\Desktop\Golasz\optislang\ready_case\parent-scripts\solution.py"
     args = [str(LengthCat1), str(LengthCool), str(LengthCat2), str(inlet_Y_SO2), str(path), str(script_file), str(mixture_file), str(solver_file)]
     
 
