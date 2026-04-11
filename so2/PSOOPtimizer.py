@@ -494,25 +494,28 @@ class SimulationSetup:
         print(f"  [2/3] Mesh created: {mesh_path}")
         return mesh_path
         
-    def _run_solution(  self,
-                        file_path,     #path to .msh.h5 file
-                        cwd,     #working directory
-                        inlet_Y_SO2: float,
-                        ):
+    def _run_solution(self, file_path: pathlib.Path,
+                    particle_dir: pathlib.Path,       # ← renamed from cwd, used consistently
+                    inlet_Y_SO2: float) -> None:
 
+        INLET_Y_O2 = 0.21 * (1 - inlet_Y_SO2)          # ← computed locally, depends on particle
+
+        so3_file = str(particle_dir / "so3-outlet-fraction.out")
+        so2_file = str(particle_dir / "so2-outlet-fraction.out")
+        case_path = str(particle_dir / "so2_reactor.cas.h5")
 
         solver_session = pyfluent.launch_fluent(
-            mode        = pyfluent.FluentMode.SOLVER,
-            cwd         = self.cwd,
-            dimension   = 3,
-            precision   = pyfluent.Precision.DOUBLE,
+            mode            = pyfluent.FluentMode.SOLVER,
+            cwd             = str(particle_dir),         # ← particle_dir, not self.cwd
+            dimension       = 3,
+            precision       = pyfluent.Precision.DOUBLE,
             processor_count = 8,
             cleanup_on_exit = True,
             ui_mode         = "no_gui",
         )
 
         try:
-            solver_session.settings.file.read_mesh(file_name= file_path)
+            solver_session.settings.file.read_mesh(file_name=str(file_path))  # ← str()
 
             mesh_obj = Mesh(solver_session, new_instance_name="mesh")
             mesh_obj.surfaces_list = mesh_obj.surfaces_list.allowed_values()
@@ -522,154 +525,106 @@ class SimulationSetup:
             general.solver.time.set_state("steady")
             general.solver.type.set_state("pressure-based")
 
-
-            viscous                 = Viscous(solver_session)
+            viscous = Viscous(solver_session)
             viscous.model           = "k-epsilon"
             viscous.k_epsilon_model = "realizable"
-            
 
             Energy(solver_session).enabled = True
 
-            species                 = Species(solver_session)
-            species.model.option    = "species-transport"
+            species = Species(solver_session)
+            species.model.option = "species-transport"
             species.reactions.enable_volumetric_reactions = True
-
-            scm_path = self.mixture_file
 
             try:
                 solver_session.tui.define.materials.data_base.database_type(
-                    "user-defined",
-                    f"{scm_path}"
-                )
-                solver_session.tui.define.materials.copy("mixture", f"{self.MIXTURE_MODEL}")
-                print(f"Loaded mixture from {scm_path}")
-                
+                    "user-defined", str(self.mixture_file))
+                solver_session.tui.define.materials.copy("mixture", self.MIXTURE_MODEL)
+                print(f"  Loaded mixture from {self.mixture_file}")
             except Exception as e:
-                print(f"Failed to load mixture SCM: {e}")
+                print(f"  Warning: Failed to load mixture SCM: {e}")
 
-            species.model.material = f"{self.MIXTURE_MODEL}"
+            species.model.material = self.MIXTURE_MODEL
 
             fluid_zone = solver_session.settings.setup.cell_zone_conditions.fluid
             for fluid in fluid_zone.get_object_names():
                 fluid_zone[fluid].reaction.react = False
 
-
-            # Porous zone setup for all catalytic porous zones
             for zone in self.CATALYST_ZONES:
                 fz = fluid_zone[zone]
                 fz.porous_zone.porous = True
-                fz.porous_zone.viscous_resistance.set_state([
-                        {"option": "value", "value": self.VISCOUS_RESISTANCE},
-                        {"option": "value", "value": self.VISCOUS_RESISTANCE},
-                        {"option": "value", "value": self.VISCOUS_RESISTANCE}
-                    ])
-                fz.porous_zone.inertial_resistance.set_state([
-                    {"option": "value", "value": self.INERTIAL_RESISTANCE},
-                    {"option": "value", "value": self.INERTIAL_RESISTANCE},
-                    {"option": "value", "value": self.INERTIAL_RESISTANCE}
-                ])
-                # Porosity
+                fz.porous_zone.viscous_resistance.set_state(
+                    [{"option": "value", "value": self.VISCOUS_RESISTANCE}] * 3)
+                fz.porous_zone.inertial_resistance.set_state(
+                    [{"option": "value", "value": self.INERTIAL_RESISTANCE}] * 3)
                 fz.porous_zone.porosity.set_state(
-                    {'option': 'value',
-                    'value': self.CATALYST_POROSITY}
-                )
+                    {"option": "value", "value": self.CATALYST_POROSITY})
                 fz.reaction.react = True
 
-            # Volumetric heat sink in cooling zone
-            fluid_zone[self.ZONE_COOLING].sources.set_state({"enable" : True})
-            fluid_zone[self.ZONE_COOLING].sources.terms["energy"].resize(1)
-            fluid_zone[self.ZONE_COOLING].sources.terms.set_state({'energy' : [{'option' : "value"}] })
-            fluid_zone[self.ZONE_COOLING].sources.terms["energy"][0].set_state(self.COOLING_HEAT_SINK)
-            fluid_zone[self.ZONE_COOLING].porous_zone.porous = True
-            fluid_zone[self.ZONE_COOLING].porous_zone.viscous_resistance.set_state([
-                        {"option": "value", "value": self.HEAT_EXCHANGER_VISCOUS_RESISTANCE},
-                        {"option": "value", "value": self.HEAT_EXCHANGER_VISCOUS_RESISTANCE},
-                        {"option": "value", "value": self.HEAT_EXCHANGER_VISCOUS_RESISTANCE}
-            ])
+            fz_cool = fluid_zone[self.ZONE_COOLING]
+            fz_cool.sources.set_state({"enable": True})
+            fz_cool.sources.terms["energy"].resize(1)
+            fz_cool.sources.terms.set_state({"energy": [{"option": "value"}]})
+            fz_cool.sources.terms["energy"][0].set_state(self.COOLING_HEAT_SINK)
+            fz_cool.porous_zone.porous = True
+            fz_cool.porous_zone.viscous_resistance.set_state(
+                [{"option": "value", "value": self.HEAT_EXCHANGER_VISCOUS_RESISTANCE}] * 3)
+            fz_cool.porous_zone.inertial_resistance.set_state(   # ← was ZONE_COOLING bare name
+                [{"option": "value", "value": self.HEAT_EXCHANGER_INERTIAL_RESISTANCE}] * 3)
 
-            fluid_zone[ZONE_COOLING].porous_zone.inertial_resistance.set_state([
-                        {"option": "value", "value": self.HEAT_EXCHANGER_INERTIAL_RESISTANCE},
-                        {"option": "value", "value": self.HEAT_EXCHANGER_INERTIAL_RESISTANCE},
-                        {"option": "value", "value": self.HEAT_EXCHANGER_INERTIAL_RESISTANCE}
-            ])
-
-
-            #Boundary conditions
             bcs = solver_session.settings.setup.boundary_conditions
             bcs.settings.physical_velocity_porous_formulation = True
-            # Inlet
             bcs.set_zone_type(zone_list=[self.INLET_NAME], new_type="velocity-inlet")
             inlet = bcs.velocity_inlet[self.INLET_NAME]
+            inlet.momentum.velocity_magnitude                = self.INLET_VELOCITY
+            inlet.thermal.temperature.value                  = self.INLET_TEMPERATURE
+            inlet.species.species_mass_fraction["so2"].value = inlet_Y_SO2
+            inlet.species.species_mass_fraction["o2"].value  = INLET_Y_O2  # ← local variable
 
-            inlet.momentum.velocity_magnitude                   = self.INLET_VELOCITY
-            inlet.thermal.temperature.value                     = self.INLET_TEMPERATURE
-            inlet.species.species_mass_fraction["so2"].value    = inlet_Y_SO2
-            inlet.species.species_mass_fraction["o2"].value     = self.INLET_Y_O2
+            outlet = bcs.pressure_outlet[self.OUTLET_NAME]
+            outlet.thermal.backflow_total_temperature.value = 700
 
-            #outlet
-            outlet                                          = bcs.pressure_outlet[self.OUTLET_NAME]
-            outlet.thermal.backflow_total_temperature.value = 700  # backflow temperature
-
-
-            #Report definitions
             rep_defs = ReportDefinitions(solver_session)
 
-            # SO3 mass flow rate at outlet
             rep_defs.surface.create(name="so3-outlet-fraction")
-            so3_rep                     = rep_defs.surface["so3-outlet-fraction"]
-            so3_rep.report_type         = "surface-areaavg"
-            so3_rep.field               = 'so3'
-            so3_rep.surface_names       = [self.OUTLET_NAME]
-            so3_rep.output_parameter    = True
+            so3_rep = rep_defs.surface["so3-outlet-fraction"]
+            so3_rep.report_type      = "surface-areaavg"
+            so3_rep.field            = "so3"
+            so3_rep.surface_names    = [self.OUTLET_NAME]
+            so3_rep.output_parameter = True
 
-            # SO2
             rep_defs.surface.create(name="so2-outlet-fraction")
-            so2_rep                 = rep_defs.surface["so2-outlet-fraction"]
-            so2_rep.report_type     = "surface-areaavg"
-            so2_rep.field           = "so2"
-            so2_rep.surface_names   = [self.OUTLET_NAME]
+            so2_rep = rep_defs.surface["so2-outlet-fraction"]
+            so2_rep.report_type   = "surface-areaavg"
+            so2_rep.field         = "so2"
+            so2_rep.surface_names = [self.OUTLET_NAME]
 
-
-            so3_file = os.path.join(cwd, "so3-outlet-fraction.out")
-            so2_file = os.path.join(cwd, "so2-outlet-fraction.out")
-
-    
             solver_session.settings.solution.monitor.report_files.create(name="so3-monitor")
             solver_session.settings.solution.monitor.report_files["so3-monitor"] = {
-                "file_name"     : so3_file,
-                "report_defs"   : ["so3-outlet-fraction"]
-            }
-
+                "file_name": so3_file, "report_defs": ["so3-outlet-fraction"]}
 
             solver_session.settings.solution.monitor.report_files.create(name="so2-monitor")
             solver_session.settings.solution.monitor.report_files["so2-monitor"] = {
-                "file_name"     : so2_file,
-                "report_defs"   : ["so2-outlet-fraction"]
-            }
+                "file_name": so2_file, "report_defs": ["so2-outlet-fraction"]}
 
-
-            initialization                      = Initialization(solver_session)
-            initialization.initialization_type  = "hybrid"
+            initialization = Initialization(solver_session)
+            initialization.initialization_type = "hybrid"
             initialization.initialize()
 
-            run_calc            = RunCalculation(solver_session)
+            run_calc = RunCalculation(solver_session)
             run_calc.iter_count = self.ITER_COUNT
             run_calc.calculate()
 
-
-            case_path = os.path.join(cwd, "so2_reactor.cas.h5")
             solver_session.settings.file.write_case_data(file_name=case_path)
-            print(f"Setup complete. Case saved to {case_path}")
+            print(f"  [3/3] Solver complete. Case saved to {case_path}")
 
-            return solver_session
+            # ← no return value — caller reads .out files directly
 
         except Exception as e:
-            print(f"Setup failed: {type(e).__name__}: {e}")
+            print(f"  Solver failed: {type(e).__name__}: {e}")
             traceback.print_exc()
             raise
         finally:
-            solver_session.exit()
-
+            solver_session.exit()          # ← always closes, regardless of success/failure
         
 class PSOOptimizer:
 
