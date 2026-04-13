@@ -183,20 +183,17 @@ class SensitivityData:
         data_matrix = np.array([r["data"] for r in self.response_dict])
         return np.mean(data_matrix, axis=1, keepdims=True)
 
+
 class OptiRun:
 
-    def __init__(self, cwd: pathlib.Path, run_path : pathlib.Path, solver_path: pathlib.Path,
-                mixture_path: pathlib.Path, geometry_script: pathlib.Path) -> None:
+    def __init__(self, cwd: pathlib.Path, mixture_path: pathlib.Path, geometry_script: pathlib.Path) -> None:
         self.cwd             = cwd
-        self.run_path        = pathlib.Path(run_path)
-        self.solver_path     = pathlib.Path(solver_path)
         self.mixture_path    = pathlib.Path(mixture_path)
         self.geometry_script = pathlib.Path(geometry_script)
         self.opti_dir        = cwd / "opti_dir"
         self.py_exe          = sys.executable
 
-        for label, path in [("solver",   self.solver_path),
-                            ("mixture",  self.mixture_path),
+        for label, path in [("mixture",  self.mixture_path),
                             ("geometry", self.geometry_script)]:
             if not path.exists():
                 raise FileNotFoundError(f"{label} file not found: {path}")
@@ -208,7 +205,7 @@ class OptiRun:
         parent_scripts.mkdir(exist_ok=True)
         self.opti_dir.mkdir(exist_ok=True)
 
-        for src in [self.solver_path, self.mixture_path, self.geometry_script, self.run_path]:
+        for src in [self.geometry_script, self.mixture_path]:
             shutil.copy(src, parent_scripts / src.name)
 
     @staticmethod
@@ -238,18 +235,14 @@ class OptiRun:
         print(f"Warning: Could not read {filepath}")
         return False
 
-    def run(self, LengthCat1, LengthCool, LengthCat2, inlet_Y_SO2,
-            particle_dir: pathlib.Path) -> np.ndarray:
+    def run(self, LengthCat1, LengthCool, LengthCat2, inlet_Y_SO2, particle_dir: pathlib.Path) -> np.ndarray:
         particle_dir.mkdir(exist_ok=True)
 
-        subprocess.run(
-            [sys.executable, str(self.cwd / "run.py"),
-            str(LengthCat1), str(LengthCool), str(LengthCat2), str(inlet_Y_SO2),
-            str(particle_dir), str(self.geometry_script),
-            str(self.mixture_path), str(self.solver_path)],
-            check=True,
-            cwd=particle_dir,
-        )
+        sim_set     = SimulationSetup(cwd= particle_dir, script_file= self.geometry_script, mixture_file= self.mixture_path)
+        script_args = sim_set.script_args(LengthCat1= LengthCat1, LengthCool= LengthCool, LengthCat2= LengthCat2, cwd= particle_dir)
+        geometry = sim_set._run_geometry(script_args= script_args)
+        mesh = sim_set._run_meshing(geometry_file= geometry)
+        solution = sim_set._run_solution(file_path= mesh, particle_dir= self.cwd, inlet_Y_SO2= inlet_Y_SO2)
 
         with open(particle_dir / "response.json") as f:
             result = json.load(f)
@@ -270,10 +263,10 @@ class OptiRun:
         for i in range(pop_size):
             particle_dir    = self.opti_dir / f"Iter{iteration:04d}_Particle{i:03d}"
             responses[:, i] = call(
-                LengthCat1   = particles[0, i],
-                LengthCool   = particles[1, i],
-                LengthCat2   = particles[2, i],
-                inlet_Y_SO2  = particles[3, i],
+                inlet_Y_SO2  = particles[0, i],
+                LengthCat1   = particles[1, i],
+                LengthCool   = particles[2, i],
+                LengthCat2   = particles[3, i],
                 particle_dir = particle_dir,
             )
         return responses
@@ -296,7 +289,7 @@ class Swarm:
         self.gbest_gain     = initial_gains[best_idx]
 
     def step(self, w: float, c1: float, c2: float) -> None:
-        """Updates velocity and positions. Violations handled by penalty only — no clamping."""
+        """Updates velocity and positions. Violations handled by penalty only"""
         n_params, pop_size = self.particles.shape
         r1 = np.random.uniform(0, 1, (n_params, pop_size))
         r2 = np.random.uniform(0, 1, (n_params, pop_size))
@@ -378,19 +371,30 @@ class SimulationSetup:
     # Inlet conditions
     INLET_VELOCITY      = 0.5
     INLET_TEMPERATURE   = 773.15 # K
-    # INLET_Y_SO2         = inlet_Y_SO2       #SO2 mass fraction at inlet
-    INLET_Y_O2          = 0.21 * (1 - INLET_Y_SO2)   #O2 in remaining air
+    INLET_Y_O2          : float
 
     # Solver
-    ITER_COUNT          = 500
+    ITER_COUNT          = 100
     
     def __init__(self, cwd: pathlib.Path,
                  script_file: pathlib.Path,
                  mixture_file: pathlib.Path) -> None:
-        self.cwd          = pathlib.Path(cwd).resolve()
-        self.script_file  = pathlib.Path(script_file).resolve()
-        self.mixture_file = pathlib.Path(mixture_file).resolve()
+        self.cwd          = pathlib.Path(cwd)
+        self.script_file  = pathlib.Path(script_file)
+        self.mixture_file = pathlib.Path(mixture_file)
 
+    def script_args(self, LengthCat1, LengthCool, LengthCat2, cwd):
+        args = {
+            "LengthBed1"  : "500",
+            "LengthCat1"  : str(LengthCat1),
+            "LengthCool"  : str(LengthCool),
+            "LengthCat2"  : str(LengthCat2),
+            "LengthBed2"  : "2500",
+            "Height"      : "2500",
+            "dir"         : str(cwd),
+            "name"        : "geometry"
+        }
+        return args
     def _run_geometry(self, script_args: dict) -> pathlib.Path:
         modeler = geometry.launch_modeler_with_spaceclaim()
         try:
@@ -406,10 +410,9 @@ class SimulationSetup:
         finally:
             modeler.exit()
 
-    def _run_meshing(self, geometry_file: pathlib.Path,
-                            particle_dir: pathlib.Path) -> pathlib.Path:
+    def _run_meshing(self, geometry_file: pathlib.Path) -> pathlib.Path:
 
-        mesh_path = particle_dir / "geometry.msh.h5"   # ← per-particle, not self.cwd
+        mesh_path = os.path.dirname(geometry_file) / "geometry.msh.h5"
 
 
         meshing_session = pyfluent.launch_fluent(
@@ -417,7 +420,7 @@ class SimulationSetup:
             precision       = "double",
             processor_count = 6,
             ui_mode         ="no_gui",
-            cwd             = str(particle_dir),
+            cwd             = str(os.path.dirname(geometry_file)),
             cleanup_on_exit = True
         )
 
@@ -495,10 +498,10 @@ class SimulationSetup:
         return mesh_path
         
     def _run_solution(self, file_path: pathlib.Path,
-                    particle_dir: pathlib.Path,       # ← renamed from cwd, used consistently
+                    particle_dir: pathlib.Path,
                     inlet_Y_SO2: float) -> None:
 
-        INLET_Y_O2 = 0.21 * (1 - inlet_Y_SO2)          # ← computed locally, depends on particle
+        self.INLET_Y_O2 = 0.21 * (1 - inlet_Y_SO2)
 
         so3_file = str(particle_dir / "so3-outlet-fraction.out")
         so2_file = str(particle_dir / "so2-outlet-fraction.out")
@@ -506,7 +509,7 @@ class SimulationSetup:
 
         solver_session = pyfluent.launch_fluent(
             mode            = pyfluent.FluentMode.SOLVER,
-            cwd             = str(particle_dir),         # ← particle_dir, not self.cwd
+            cwd             = str(particle_dir),      
             dimension       = 3,
             precision       = pyfluent.Precision.DOUBLE,
             processor_count = 8,
@@ -578,7 +581,7 @@ class SimulationSetup:
             inlet.momentum.velocity_magnitude                = self.INLET_VELOCITY
             inlet.thermal.temperature.value                  = self.INLET_TEMPERATURE
             inlet.species.species_mass_fraction["so2"].value = inlet_Y_SO2
-            inlet.species.species_mass_fraction["o2"].value  = INLET_Y_O2  # ← local variable
+            inlet.species.species_mass_fraction["o2"].value  = self.INLET_Y_O2  # ← local variable
 
             outlet = bcs.pressure_outlet[self.OUTLET_NAME]
             outlet.thermal.backflow_total_temperature.value = 700
@@ -701,10 +704,9 @@ class PSOOptimizer:
     
 if __name__ == "__main__":
     config = PSOConfig()
+    print()
     runner = OptiRun(
         cwd             = pathlib.Path.cwd(),
-        run_path        = pathlib.Path(r"C:\Users\hp\Desktop\Me\Studia\CFD\pyfluent\pyfluent\so2\run.py"),
-        solver_path     = pathlib.Path(r"C:\Users\hp\Desktop\Me\Studia\CFD\pyfluent\pyfluent\so2\solution.py"),
         mixture_path    = pathlib.Path(r"C:\Users\hp\Desktop\Me\Studia\CFD\pyfluent\pyfluent\so2\reaction-mixture.scm"),
         geometry_script = pathlib.Path(r"C:\Users\hp\Desktop\Me\Studia\CFD\pyfluent\pyfluent\so2\geometry_script_3d_python_v.scscript"),
     )
@@ -720,7 +722,7 @@ if __name__ == "__main__":
 
     print("response_means shape:", sens.response_means.shape)
     best_params, best_nsofv, best_ids = sens.best_designs(n_designs=15)
-    print("best_params shape:", best_params.shape)
+    print("best_params:", best_params)
     print("best_ids:", best_ids)
     print("best_nsofv:", best_nsofv.round(4))
 
