@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from scipy.optimize import Bounds, LinearConstraint
 import numpy as np
-import pathlib, shutil, os, subprocess, json, csv, sys, traceback
+import pathlib, shutil, os, json, csv, sys, traceback, time
 from os import PathLike
 import ansys.geometry.core as geometry
 import ansys.fluent.core as pyfluent
@@ -242,7 +242,8 @@ class OptiRun:
         script_args = sim_set.script_args(LengthCat1= LengthCat1, LengthCool= LengthCool, LengthCat2= LengthCat2, cwd= particle_dir)
         geometry = sim_set._run_geometry(script_args= script_args)
         mesh = sim_set._run_meshing(geometry_file= geometry)
-        solution = sim_set._run_solution(file_path= mesh, particle_dir= self.cwd, inlet_Y_SO2= inlet_Y_SO2)
+        time.sleep(5)
+        solution = sim_set._run_solution(file_path= mesh, inlet_Y_SO2= inlet_Y_SO2)
 
         with open(particle_dir / "response.json") as f:
             result = json.load(f)
@@ -371,7 +372,6 @@ class SimulationSetup:
     # Inlet conditions
     INLET_VELOCITY      = 0.5
     INLET_TEMPERATURE   = 773.15 # K
-    INLET_Y_O2          : float
 
     # Solver
     ITER_COUNT          = 100
@@ -411,8 +411,8 @@ class SimulationSetup:
             modeler.exit()
 
     def _run_meshing(self, geometry_file: pathlib.Path) -> pathlib.Path:
-
-        mesh_path = os.path.dirname(geometry_file) / "geometry.msh.h5"
+        dir = pathlib.Path(geometry_file).parent
+        mesh_path = dir / "geometry.msh.h5"
 
 
         meshing_session = pyfluent.launch_fluent(
@@ -420,7 +420,7 @@ class SimulationSetup:
             precision       = "double",
             processor_count = 6,
             ui_mode         ="no_gui",
-            cwd             = str(os.path.dirname(geometry_file)),
+            cwd             = str(dir),
             cleanup_on_exit = True
         )
 
@@ -497,27 +497,28 @@ class SimulationSetup:
         print(f"  [2/3] Mesh created: {mesh_path}")
         return mesh_path
         
-    def _run_solution(self, file_path: pathlib.Path,
-                    particle_dir: pathlib.Path,
-                    inlet_Y_SO2: float) -> None:
+    def _run_solution(self, file_path: pathlib.Path, inlet_Y_SO2: float) -> None:
+        http_proxy = os.environ.get('http_proxy')
+        https_proxy = os.environ.get("https_proxy")
 
-        self.INLET_Y_O2 = 0.21 * (1 - inlet_Y_SO2)
+        dir = pathlib.Path(file_path).parent
+        inlet_y_o2 = 0.21 * (1 - inlet_Y_SO2)
 
-        so3_file = str(particle_dir / "so3-outlet-fraction.out")
-        so2_file = str(particle_dir / "so2-outlet-fraction.out")
-        case_path = str(particle_dir / "so2_reactor.cas.h5")
-
-        solver_session = pyfluent.launch_fluent(
-            mode            = pyfluent.FluentMode.SOLVER,
-            cwd             = str(particle_dir),      
-            dimension       = 3,
-            precision       = pyfluent.Precision.DOUBLE,
-            processor_count = 8,
-            cleanup_on_exit = True,
-            ui_mode         = "no_gui",
-        )
-
+        so3_file = str(dir / "so3-outlet-fraction.out")
+        so2_file = str(dir / "so2-outlet-fraction.out")
+        case_path = str(dir / "so2_reactor.cas.h5")
         try:
+
+            solver_session = pyfluent.launch_fluent(
+                mode            = pyfluent.FluentMode.SOLVER,
+                cwd             = str(dir),      
+                dimension       = 3,
+                precision       = pyfluent.Precision.DOUBLE,
+                processor_count = 6,
+                cleanup_on_exit = True,
+                ui_mode         = "no_gui",                
+            )
+
             solver_session.settings.file.read_mesh(file_name=str(file_path))  # ← str()
 
             mesh_obj = Mesh(solver_session, new_instance_name="mesh")
@@ -581,7 +582,7 @@ class SimulationSetup:
             inlet.momentum.velocity_magnitude                = self.INLET_VELOCITY
             inlet.thermal.temperature.value                  = self.INLET_TEMPERATURE
             inlet.species.species_mass_fraction["so2"].value = inlet_Y_SO2
-            inlet.species.species_mass_fraction["o2"].value  = self.INLET_Y_O2  # ← local variable
+            inlet.species.species_mass_fraction["o2"].value  = inlet_y_o2  # ← local variable
 
             outlet = bcs.pressure_outlet[self.OUTLET_NAME]
             outlet.thermal.backflow_total_temperature.value = 700
@@ -617,17 +618,16 @@ class SimulationSetup:
             run_calc.iter_count = self.ITER_COUNT
             run_calc.calculate()
 
-            solver_session.settings.file.write_case_data(file_name=case_path)
+            solver_session.settings.file.write_case_data(file_name= case_path)
             print(f"  [3/3] Solver complete. Case saved to {case_path}")
 
-            # ← no return value — caller reads .out files directly
 
         except Exception as e:
             print(f"  Solver failed: {type(e).__name__}: {e}")
             traceback.print_exc()
             raise
         finally:
-            solver_session.exit()          # ← always closes, regardless of success/failure
+            solver_session.exit()
         
 class PSOOptimizer:
 
